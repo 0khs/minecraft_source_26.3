@@ -1,0 +1,22 @@
+/*
+ * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.jspecify.annotations.Nullable
+ */
+package com.mojang.blaze3d.pipeline;
+
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.GpuFormat;
+import org.jspecify.annotations.Nullable;
+
+public class TextureTarget
+extends RenderTarget {
+    public TextureTarget(@Nullable String label, int width, int height, @Nullable GpuFormat colorFormat, @Nullable GpuFormat depthFormat) {
+        super(label, colorFormat, depthFormat);
+        RenderSystem.assertOnRenderThread();
+        this.resize(width, height);
+    }
+}
+

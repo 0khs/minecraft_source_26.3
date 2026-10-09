@@ -1,0 +1,34 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package net.minecraft.world.item.component;
+
+import java.util.List;
+import net.minecraft.world.item.ItemProvider;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.SimpleMutableContainer;
+import net.minecraft.world.item.slot.SlotSelector;
+
+public abstract class GrowableMutableContainer<T>
+extends SimpleMutableContainer<T> {
+    public GrowableMutableContainer(List<ItemStack> items) {
+        super(items);
+    }
+
+    public abstract boolean canInsertNewSlots();
+
+    @Override
+    public int replaceSlotItems(ItemProvider newItems, SlotSelector slotSelector) {
+        int successCount = super.replaceSlotItems(newItems, slotSelector);
+        while (newItems.hasNext() && this.canInsertNewSlots() && slotSelector.trySelectSlot(ItemStack.EMPTY) && this.addSlotWithItem(newItems)) {
+            ++successCount;
+        }
+        return successCount;
+    }
+
+    protected boolean addSlotWithItem(ItemProvider newItems) {
+        this.items.add(newItems.next());
+        return true;
+    }
+}
+

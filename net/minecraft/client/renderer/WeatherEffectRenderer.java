@@ -1,0 +1,237 @@
+/*
+ * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.jspecify.annotations.Nullable
+ */
+package net.minecraft.client.renderer;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.ByteBufferBuilder;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.device.GpuDevice;
+import com.mojang.renderpearl.api.pipeline.IndexType;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.textures.FilterMode;
+import java.nio.ByteBuffer;
+import java.util.List;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.oit.OitStage;
+import net.minecraft.client.renderer.state.level.WeatherRenderState;
+import net.minecraft.client.renderer.texture.AbstractTexture;
+import net.minecraft.client.renderer.texture.TextureManager;
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.ARGB;
+import net.minecraft.util.LightCoordsUtil;
+import net.minecraft.util.Mth;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
+
+public class WeatherEffectRenderer
+implements AutoCloseable {
+    private static final Identifier RAIN_LOCATION = Identifier.withDefaultNamespace("textures/environment/rain.png");
+    private static final Identifier SNOW_LOCATION = Identifier.withDefaultNamespace("textures/environment/snow.png");
+    private static final int RAIN_TABLE_SIZE = 32;
+    private static final int HALF_RAIN_TABLE_SIZE = 16;
+    private static final int INDICES_PER_COLUMN = 6;
+    private final float[] columnSizeX = new float[1024];
+    private final float[] columnSizeZ = new float[1024];
+    private final GameRenderer gameRenderer;
+    private final TextureManager textureManager;
+    private @Nullable AbstractTexture rainTexture;
+    private @Nullable AbstractTexture snowTexture;
+    private @Nullable GpuBuffer vertexBuffer;
+    private @Nullable PrimitiveTopology primitiveTopology;
+    private int indexCount;
+
+    public WeatherEffectRenderer() {
+        for (int z = 0; z < 32; ++z) {
+            for (int x = 0; x < 32; ++x) {
+                float deltaX = x - 16;
+                float deltaZ = z - 16;
+                float distance = Mth.length(deltaX, deltaZ);
+                this.columnSizeX[z * 32 + x] = -deltaZ / distance;
+                this.columnSizeZ[z * 32 + x] = deltaX / distance;
+            }
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        this.gameRenderer = minecraft.gameRenderer;
+        this.textureManager = minecraft.getTextureManager();
+    }
+
+    public void extractRenderState(ClientLevel level, float partialTicks, Vec3 cameraPos, WeatherRenderState renderState) {
+        renderState.intensity = level.getRainLevel(partialTicks);
+        if (renderState.intensity <= 0.0f) {
+            return;
+        }
+        renderState.radius = Minecraft.getInstance().options.weatherRadius().get();
+        int cameraBlockX = Mth.floor(cameraPos.x);
+        int cameraBlockY = Mth.floor(cameraPos.y);
+        int cameraBlockZ = Mth.floor(cameraPos.z);
+        BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+        RandomSource random = RandomSource.createThreadLocalInstance();
+        for (int z = cameraBlockZ - renderState.radius; z <= cameraBlockZ + renderState.radius; ++z) {
+            for (int x = cameraBlockX - renderState.radius; x <= cameraBlockX + renderState.radius; ++x) {
+                Biome.Precipitation precipitation;
+                int terrainHeight = level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
+                int y0 = Math.max(cameraBlockY - renderState.radius, terrainHeight);
+                int y1 = Math.max(cameraBlockY + renderState.radius, terrainHeight);
+                if (y1 - y0 == 0 || (precipitation = level.getPrecipitationAt(mutablePos.set(x, cameraBlockY, z))) == Biome.Precipitation.NONE) continue;
+                int seed = x * x * 3121 + x * 45238971 ^ z * z * 418711 + z * 13761;
+                random.setSeed(seed);
+                int lightSampleY = Math.max(cameraBlockY, terrainHeight);
+                int lightCoords = LightCoordsUtil.getLightCoords(level, mutablePos.set(x, lightSampleY, z));
+                if (precipitation == Biome.Precipitation.RAIN) {
+                    renderState.rainColumns.add(this.createRainColumnInstance(random, level.getGameTime(), x, y0, y1, z, lightCoords, partialTicks));
+                    continue;
+                }
+                if (precipitation != Biome.Precipitation.SNOW) continue;
+                renderState.snowColumns.add(this.createSnowColumnInstance(random, level.getGameTime(), x, y0, y1, z, lightCoords, partialTicks));
+            }
+        }
+    }
+
+    private void renderWeather(RenderPass renderPass, AbstractTexture texture, int startColumn, int columnCount) {
+        renderPass.setUniform("Sampler0", texture.getTextureView(), texture.getSampler());
+        renderPass.drawIndexed(columnCount * 6, 1, startColumn * 6, 0, 0);
+    }
+
+    private void uploadVertexBuffer(ByteBuffer buffer) {
+        GpuDevice device = RenderSystem.getDevice();
+        if (this.vertexBuffer == null || this.vertexBuffer.size() < (long)buffer.remaining()) {
+            if (this.vertexBuffer != null) {
+                this.vertexBuffer.close();
+            }
+            this.vertexBuffer = device.createBuffer(() -> "Weather Vertex Buffer", 40, buffer.remaining());
+        }
+        device.createCommandEncoder().writeToBuffer(this.vertexBuffer.slice(), buffer);
+    }
+
+    public void prepare(Vec3 cameraPos, WeatherRenderState renderState) {
+        int columnCount = renderState.rainColumns.size() + renderState.snowColumns.size();
+        if (columnCount == 0) {
+            return;
+        }
+        try (ByteBufferBuilder builder = ByteBufferBuilder.exactlySized(columnCount * DefaultVertexFormat.PARTICLE.getVertexSize() * 4);){
+            BufferBuilder bufferBuilder = new BufferBuilder(builder, PrimitiveTopology.QUADS, DefaultVertexFormat.PARTICLE);
+            this.prepareInstances(bufferBuilder, renderState.rainColumns, cameraPos, 1.0f, renderState.radius, renderState.intensity);
+            this.prepareInstances(bufferBuilder, renderState.snowColumns, cameraPos, 0.8f, renderState.radius, renderState.intensity);
+            try (MeshData mesh = bufferBuilder.buildOrThrow();){
+                this.uploadVertexBuffer(mesh.vertexBuffer());
+                this.primitiveTopology = mesh.drawState().primitiveTopology();
+                this.indexCount = mesh.drawState().indexCount();
+            }
+        }
+        RenderSystem.AutoStorageIndexBuffer autoIndices = RenderSystem.getSequentialBuffer(this.primitiveTopology);
+        autoIndices.requestIndexCount(this.indexCount);
+        this.rainTexture = this.textureManager.getTexture(RAIN_LOCATION);
+        this.snowTexture = this.textureManager.getTexture(SNOW_LOCATION);
+    }
+
+    public void render(WeatherRenderState renderState, RenderPass renderPass) {
+        RenderPipeline renderPipeline = RenderPipelines.WEATHER;
+        this.render(renderState, renderPass, renderPipeline);
+    }
+
+    public void renderOit(OitStage stage, WeatherRenderState renderState, RenderPass renderPass) {
+        RenderPipeline renderPipeline = RenderPipelines.OIT_WEATHER.getPipeline(stage);
+        this.render(renderState, renderPass, renderPipeline);
+    }
+
+    private void render(WeatherRenderState renderState, RenderPass renderPass, RenderPipeline renderPipeline) {
+        int columnCount = renderState.rainColumns.size() + renderState.snowColumns.size();
+        if (this.vertexBuffer == null || columnCount == 0) {
+            return;
+        }
+        renderPass.pushDebugGroup(() -> "Weather");
+        GpuBufferSlice dynamicTransforms = RenderSystem.getDynamicUniforms().writeTransform(RenderSystem.getModelViewMatrixCopy());
+        RenderSystem.AutoStorageIndexBuffer autoIndices = RenderSystem.getSequentialBuffer(this.primitiveTopology);
+        GpuBuffer indexBuffer = autoIndices.getBuffer();
+        IndexType indexType = autoIndices.type();
+        renderPass.setPipeline(RenderSystem.getCompiledPipeline(renderPipeline));
+        RenderSystem.bindDefaultUniforms(renderPass);
+        renderPass.setUniform("DynamicTransforms", dynamicTransforms);
+        renderPass.setUniform("Sampler2", this.gameRenderer.lightmap(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+        renderPass.setIndexBuffer(indexBuffer, indexType);
+        renderPass.setVertexBuffer(0, this.vertexBuffer.slice());
+        this.renderWeather(renderPass, this.rainTexture, 0, renderState.rainColumns.size());
+        this.renderWeather(renderPass, this.snowTexture, renderState.rainColumns.size(), renderState.snowColumns.size());
+        renderPass.popDebugGroup();
+    }
+
+    private ColumnInstance createRainColumnInstance(RandomSource random, long ticks, int x, int bottomY, int topY, int z, int lightCoords, float partialTicks) {
+        int wrappedTicks = (int)(ticks & 0x1FFFFL);
+        int tickOffset = x * x * 3121 + x * 45238971 + z * z * 418711 + z * 13761 & 0xFF;
+        float blockPosRainSpeed = 3.0f + random.nextFloat();
+        float textureOffset = -((float)(wrappedTicks + tickOffset) + partialTicks) / 32.0f * blockPosRainSpeed;
+        float wrappedTextureOffset = textureOffset % 32.0f;
+        return new ColumnInstance(x, z, bottomY, topY, 0.0f, wrappedTextureOffset, lightCoords);
+    }
+
+    private ColumnInstance createSnowColumnInstance(RandomSource random, long ticks, int x, int bottomY, int topY, int z, int lightCoords, float partialTicks) {
+        int wrappedTicks = (int)(ticks & 0x1FFFFL);
+        float time = (float)wrappedTicks + partialTicks;
+        float u = (float)(random.nextDouble() + (double)(time * 0.01f * (float)random.nextGaussian()));
+        float v = (float)(random.nextDouble() + (double)(time * (float)random.nextGaussian() * 0.001f));
+        float vOffset = -((float)(ticks & 0x1FFL) + partialTicks) / 512.0f;
+        int brightenedLightCoords = LightCoordsUtil.pack((LightCoordsUtil.block(lightCoords) * 3 + 15) / 4, (LightCoordsUtil.sky(lightCoords) * 3 + 15) / 4);
+        return new ColumnInstance(x, z, bottomY, topY, u, vOffset + v, brightenedLightCoords);
+    }
+
+    private void prepareInstances(VertexConsumer builder, List<ColumnInstance> columns, Vec3 cameraPos, float maxAlpha, int radius, float intensity) {
+        if (columns.isEmpty()) {
+            return;
+        }
+        float radiusSq = radius * radius;
+        for (ColumnInstance column : columns) {
+            float relativeX = (float)((double)column.x + 0.5 - cameraPos.x);
+            float relativeZ = (float)((double)column.z + 0.5 - cameraPos.z);
+            float distanceSq = Mth.lengthSquared(relativeX, relativeZ);
+            float alpha = Mth.lerp(Math.min(distanceSq / radiusSq, 1.0f), maxAlpha, 0.5f) * intensity;
+            int color = ARGB.white(alpha);
+            int index = (column.z - Mth.floor(cameraPos.z) + 16) * 32 + column.x - Mth.floor(cameraPos.x) + 16;
+            float halfSizeX = this.columnSizeX[index] / 2.0f;
+            float halfSizeZ = this.columnSizeZ[index] / 2.0f;
+            float x0 = relativeX - halfSizeX;
+            float x1 = relativeX + halfSizeX;
+            float y1 = (float)((double)column.topY - cameraPos.y);
+            float y0 = (float)((double)column.bottomY - cameraPos.y);
+            float z0 = relativeZ - halfSizeZ;
+            float z1 = relativeZ + halfSizeZ;
+            float u0 = column.uOffset + 0.0f;
+            float u1 = column.uOffset + 1.0f;
+            float v0 = (float)column.bottomY * 0.25f + column.vOffset;
+            float v1 = (float)column.topY * 0.25f + column.vOffset;
+            builder.addVertex(x0, y1, z0).setUv(u0, v0).setColor(color).setLight(column.lightCoords);
+            builder.addVertex(x1, y1, z1).setUv(u1, v0).setColor(color).setLight(column.lightCoords);
+            builder.addVertex(x1, y0, z1).setUv(u1, v1).setColor(color).setLight(column.lightCoords);
+            builder.addVertex(x0, y0, z0).setUv(u0, v1).setColor(color).setLight(column.lightCoords);
+        }
+    }
+
+    @Override
+    public void close() {
+        if (this.vertexBuffer != null) {
+            this.vertexBuffer.close();
+            this.vertexBuffer = null;
+        }
+    }
+
+    public record ColumnInstance(int x, int z, int bottomY, int topY, float uOffset, float vOffset, int lightCoords) {
+    }
+}
+

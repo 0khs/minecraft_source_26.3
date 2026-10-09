@@ -1,0 +1,53 @@
+/*
+ * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  com.mojang.datafixers.kinds.App
+ *  com.mojang.datafixers.kinds.Applicative
+ *  com.mojang.serialization.MapCodec
+ *  com.mojang.serialization.codecs.RecordCodecBuilder
+ */
+package net.minecraft.world.level.storage.loot.providers.number.ints;
+
+import com.mojang.datafixers.kinds.App;
+import com.mojang.datafixers.kinds.Applicative;
+import com.mojang.serialization.MapCodec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.minecraft.core.Holder;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.storage.loot.LootContext;
+import net.minecraft.world.level.storage.loot.Validatable;
+import net.minecraft.world.level.storage.loot.ValidationContext;
+import net.minecraft.world.level.storage.loot.providers.number.floats.ContextFloatProvider;
+import net.minecraft.world.level.storage.loot.providers.number.floats.ContextFloatProviders;
+import net.minecraft.world.level.storage.loot.providers.number.ints.ContextIntProvider;
+import net.minecraft.world.level.storage.loot.providers.number.ints.ContextIntProviders;
+
+public record BinomialDistributionGenerator(Holder<ContextIntProvider> n, Holder<ContextFloatProvider> p) implements ContextIntProvider
+{
+    public static final MapCodec<BinomialDistributionGenerator> MAP_CODEC = RecordCodecBuilder.mapCodec(i -> i.group((App)ContextIntProviders.CODEC.fieldOf("n").forGetter(BinomialDistributionGenerator::n), (App)ContextFloatProviders.CODEC.fieldOf("p").forGetter(BinomialDistributionGenerator::p)).apply((Applicative)i, BinomialDistributionGenerator::new));
+
+    public MapCodec<BinomialDistributionGenerator> codec() {
+        return MAP_CODEC;
+    }
+
+    @Override
+    public int getIntUnsafe(LootContext context) {
+        int n = this.n().value().getIntUnsafe(context);
+        float p = this.p().value().getFloatOrThrow(context);
+        RandomSource random = context.getRandom();
+        int result = 0;
+        for (int i = 0; i < n; ++i) {
+            if (!(random.nextFloat() < p)) continue;
+            ++result;
+        }
+        return result;
+    }
+
+    @Override
+    public void validate(ValidationContext context) {
+        Validatable.validateHolder(context, "n", this.n);
+        Validatable.validateHolder(context, "p", this.p);
+    }
+}
+

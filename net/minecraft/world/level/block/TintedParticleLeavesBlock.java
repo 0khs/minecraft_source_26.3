@@ -1,0 +1,28 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package net.minecraft.world.level.block;
+
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ColorParticleOption;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.util.ParticleUtils;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.FallingParticlesLeavesBlock;
+import net.minecraft.world.level.block.sounds.AmbientLeavesBlockSoundPlayer;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+
+public class TintedParticleLeavesBlock
+extends FallingParticlesLeavesBlock {
+    public TintedParticleLeavesBlock(float leafParticleChance, BlockBehaviour.Properties properties) {
+        super(leafParticleChance, AmbientLeavesBlockSoundPlayer.noAmbientSound(), properties);
+    }
+
+    @Override
+    protected void spawnFallingLeavesParticle(Level level, BlockPos pos, RandomSource random) {
+        ColorParticleOption particle = ColorParticleOption.create(ParticleTypes.TINTED_LEAVES, level.getClientLeafTintColor(pos));
+        ParticleUtils.spawnParticleBelow(level, pos, random, particle);
+    }
+}
+

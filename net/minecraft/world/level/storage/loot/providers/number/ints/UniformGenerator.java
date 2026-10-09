@@ -1,0 +1,31 @@
+/*
+ * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  com.mojang.serialization.MapCodec
+ */
+package net.minecraft.world.level.storage.loot.providers.number.ints;
+
+import com.mojang.serialization.MapCodec;
+import net.minecraft.core.Holder;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.storage.loot.LootContext;
+import net.minecraft.world.level.storage.loot.providers.number.RangeProvider;
+import net.minecraft.world.level.storage.loot.providers.number.ints.ContextIntProvider;
+import net.minecraft.world.level.storage.loot.providers.number.ints.ContextIntProviders;
+
+public record UniformGenerator(Holder<ContextIntProvider> min, Holder<ContextIntProvider> max) implements ContextIntProvider,
+RangeProvider<ContextIntProvider>
+{
+    public static final MapCodec<UniformGenerator> MAP_CODEC = RangeProvider.mapCodec(ContextIntProviders.CODEC, UniformGenerator::new);
+
+    public MapCodec<UniformGenerator> codec() {
+        return MAP_CODEC;
+    }
+
+    @Override
+    public int getIntUnsafe(LootContext context) {
+        return Mth.nextInt(context.getRandom(), this.min().value().getIntUnsafe(context), this.max().value().getIntUnsafe(context));
+    }
+}
+

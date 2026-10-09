@@ -1,0 +1,29 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package net.minecraft.client.renderer.chunk;
+
+import java.util.Locale;
+import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
+
+public enum ChunkSectionLayerGroup {
+    OPAQUE(ChunkSectionLayer.SOLID, ChunkSectionLayer.CUTOUT),
+    TRANSLUCENT(ChunkSectionLayer.TRANSLUCENT);
+
+    private final String label;
+    private final ChunkSectionLayer[] layers;
+
+    private ChunkSectionLayerGroup(ChunkSectionLayer ... layers) {
+        this.layers = layers;
+        this.label = this.toString().toLowerCase(Locale.ROOT);
+    }
+
+    public String label() {
+        return this.label;
+    }
+
+    public ChunkSectionLayer[] layers() {
+        return this.layers;
+    }
+}
+
